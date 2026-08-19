@@ -95,11 +95,17 @@ gpumask zapzap --exclude nogpu --apply
 
 ## Uninstall
 
+### Quick (recommended)
+
 ```bash
-# manual / from source
-make uninstall
+curl -fsSL https://raw.githubusercontent.com/zeroxuf/gpumask/main/uninstall.sh | bash
 ```
 
+### manual / from source
+```bash
+make uninstall
+
+```
 Run `gpumask --status` first if you want to `--undo` any wrapped apps
 before removing the package — uninstalling `gpumask` itself won't revert
 already-patched `.desktop` files.
