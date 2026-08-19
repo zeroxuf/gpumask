@@ -24,7 +24,7 @@ set -euo pipefail
 shopt -s nullglob nocaseglob
 
 PROG="gpumask"
-VERSION="1.0.0"
+VERSION="1.1.0"
 
 APPS_DIR="$HOME/.local/share/applications"
 SYSTEM_DIRS=(
@@ -67,14 +67,7 @@ Usage:
   $PROG APP --exclude TOKEN --apply  patch, skip matches containing TOKEN
   $PROG APP [APP...] --undo          remove the wrapper
   $PROG --status                     list currently-wrapped apps
-
-Flags can go anywhere in the command:
-  $PROG discord code zed spotify             # preview only, shows what would match
-  $PROG discord code zed spotify --apply     # actually applies it
-  $PROG zapzap --exclude nogpu --apply       # skip the nogpu variant
-  $PROG zed --undo
-  $PROG --undo zed
-  $PROG --status
+  $PROG --doctor                     check your system for common issues
 
 Other:
   -h, --help     show this help
@@ -99,8 +92,12 @@ while [[ $# -gt 0 ]]; do
     MODE="status"
     shift
     ;;
+  --doctor)
+    MODE="doctor"
+    shift
+    ;;
   --undo)
-    [[ "$MODE" == "status" ]] || MODE="undo"
+    [[ "$MODE" == "status" || "$MODE" == "doctor" ]] || MODE="undo"
     shift
     ;;
   --apply)
@@ -153,6 +150,41 @@ if [[ "$MODE" == "status" ]]; then
   done
   echo ""
   echo "Wrapped apps: $found"
+  exit 0
+fi
+
+if [[ "$MODE" == "doctor" ]]; then
+  echo "gpumask doctor report:"
+  echo ""
+
+  if ! command -v bwrap >/dev/null 2>&1; then
+    echo "Bwrap not installed, please make sure to install it using your distro's package manager"
+  else
+    echo "Bwrap installed"
+  fi
+
+  if [[ -z "$IGPU_BIN" ]]; then
+    echo "gpumask-run not installed"
+  elif [[ ! -x "$IGPU_BIN" ]]; then
+    echo "gpumask-run found but not executable"
+  else
+    echo "gpumask-run installed"
+  fi
+
+  DGPU_PCI=""
+  for dev in /sys/bus/pci/devices/*; do
+    if [[ -r "$dev/vendor" ]] && [[ "$(cat "$dev/vendor")" == "0x10de" ]]; then
+      DGPU_PCI="${dev##*/}"
+      break
+    fi
+  done
+
+  if [[ -z "$DGPU_PCI" ]]; then
+    echo "NVIDIA GPU not found"
+  else
+    echo "NVIDIA GPU found"
+  fi
+
   exit 0
 fi
 

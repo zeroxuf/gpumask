@@ -83,15 +83,56 @@ gpumask zapzap --exclude nogpu --apply
 
 ### Full flag reference
 
-| Flag              | Effect                                              |
-|-------------------|------------------------------------------------------|
-| *(none)*          | Preview mode — shows what would match, changes nothing |
-| `--apply`         | Actually patch the matched `.desktop` files          |
-| `--undo`          | Remove the wrapper, restoring default behavior       |
-| `--status`        | List every app currently wrapped                     |
-| `--exclude TOKEN` | Skip matches whose filename/name contains `TOKEN`    |
-| `-h`, `--help`    | Show usage                                            |
-| `--version`       | Show version                                          |
+| Flag              | Effect                                                 |
+|-------------------|--------------------------------------------------------|
+| *(none)*            | Preview mode — shows what would match, changes nothing |
+| `--apply`           | Actually patch the matched `.desktop` files              |
+| `--undo`            | Remove the wrapper, restoring default behavior         |
+| `--status`          | List every app currently wrapped                       |
+| `--doctor`          | check your system for common issues                    |
+| `--exclude TOKEN`   | Skip matches whose filename/name contains `TOKEN`        |
+| `-h`, `--help`        | Show usage                                             |
+| `--version`         | Show version                                           |
+
+## Tested Hardware
+
+`gpumask` has been tested and confirmed working on:
+
+- **GPU pair:** NVIDIA (dGPU) + Intel (iGPU) hybrid laptop
+- **Display server:** Wayland session
+- **Distro:** CachyOS (Arch-based)
+- **NVIDIA driver:** proprietary (not `nouveau`, not `nvidia-open`)
+
+This is currently the *only* combination verified end-to-end. It should
+work — and the code is written to be hardware-agnostic where possible
+(see below) — on other combinations, but they haven't been confirmed
+by an actual run yet.
+
+### Should work, not yet confirmed
+
+These are supported by the code's design, but need a real test report
+before being called "supported":
+
+- **AMD iGPU instead of Intel** — `gpumask-run` detects the NVIDIA dGPU
+  dynamically by PCI vendor ID (`0x10de`), not a hardcoded address, and
+  picks whichever non-NVIDIA Vulkan ICD is present on the system rather
+  than assuming `intel_icd.x86_64.json`. In principle this means an
+  AMD (RADV) iGPU should work the same way — but it hasn't been run on
+  one yet.
+- **X11 sessions** — the masking mechanism (bubblewrap + device node
+  hiding) doesn't depend on Wayland specifically, so X11 should behave
+  the same. Not yet tested.
+- **Other distros** (Fedora, Ubuntu/Debian, openSUSE) — `install.sh`
+  detects `pacman`/`apt`/`dnf`, but only the Arch/CachyOS path has
+  actually been exercised.
+
+### Want to help expand this list?
+
+If you've run `gpumask` successfully (or unsuccessfully) on a
+combination not listed above — different GPU vendor pairing, different
+distro, X11 vs Wayland — please open an issue with your hardware and
+driver details. Real test reports are what turn "should work" into
+"tested."
 
 ## Uninstall
 
@@ -104,8 +145,8 @@ curl -fsSL https://raw.githubusercontent.com/zeroxuf/gpumask/main/uninstall.sh |
 ### manual / from source
 ```bash
 make uninstall
-
 ```
+
 Run `gpumask --status` first if you want to `--undo` any wrapped apps
 before removing the package — uninstalling `gpumask` itself won't revert
 already-patched `.desktop` files.
