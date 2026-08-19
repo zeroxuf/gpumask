@@ -24,7 +24,7 @@ set -euo pipefail
 shopt -s nullglob nocaseglob
 
 PROG="gpumask"
-VERSION="1.1.0"
+VERSION="1.2.0"
 
 APPS_DIR="$HOME/.local/share/applications"
 SYSTEM_DIRS=(
@@ -94,6 +94,10 @@ while [[ $# -gt 0 ]]; do
     ;;
   --doctor)
     MODE="doctor"
+    shift
+    ;;
+  --fix)
+    MODE="fix"
     shift
     ;;
   --undo)
@@ -185,6 +189,39 @@ if [[ "$MODE" == "doctor" ]]; then
     echo "NVIDIA GPU found"
   fi
 
+  exit 0
+fi
+
+if [[ "$MODE" == "fix" ]]; then
+  echo "fix missing files..."
+
+  if ! command -v bwrap >/dev/null 2>&1; then
+
+    echo "bubblewrap is not installed in your system."
+    if command -v pacman >/dev/null 2>&1; then
+      echo "install via pacman"
+      sudo pacman -S --needed bubblewrap
+    elif command -v apt-get >/dev/null 2>&1; then
+      echo "install via apt"
+      sudo apt-get update && sudo apt-get install --no-upgrade bubblewrap
+    elif command -v dnf >/dev/null 2>&1; then
+      echo "install via dnf"
+      sudo dnf install bubblewrap
+    else
+      echo "unknown package manager, please install bubblewrap manually"
+    fi
+  else
+    echo "bubblewrap installed, skipping"
+  fi
+
+  if [[ -z "$IGPU_BIN" ]]; then
+    echo "gpumask-run not installed"
+    echo "installing..."
+    curl -fsSL https://raw.githubusercontent.com/zeroxuf/gpumask/main/install.sh | bash
+    echo "Everything complete!"
+  else
+    echo "program already installed! no changes needed!"
+  fi
   exit 0
 fi
 

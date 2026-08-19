@@ -2,10 +2,9 @@
 
 Force specific apps to launch on the Intel iGPU by hiding the NVIDIA dGPU
 from them — without touching your global PRIME/offload setup, and without
-affecting games or anything else.
+affecting other system
 
-Built for the common hybrid-graphics annoyance: apps like Slack, Discord,
-or Spotify waking up the NVIDIA card just to enumerate GPUs on startup,
+Built for the common hybrid-graphics annoyance: apps waking up the NVIDIA card just to enumerate GPUs on startup,
 burning power for no reason.
 
 ## How it works
@@ -57,18 +56,10 @@ make PREFIX=$HOME/.local install   # or a user-local install
 ## Usage
 
 ```bash
-gpumask spotify discord slack           # preview matches (safe, nothing changes)
-gpumask spotify discord slack --apply   # actually patch them
-gpumask spotify --undo                  # remove the wrapper from spotify
+gpumask [APPNAME]                       # preview matches (safe, nothing changes)
+gpumask [APPNAME] --apply               # actually patch them
+gpumask [APPNAME] --undo                # remove the wrapper from [APPNAME]
 gpumask --status                        # list every app currently wrapped
-```
-
-Flags can go anywhere in the command:
-
-```bash
-gpumask spotify --apply
-gpumask --undo spotify
-gpumask spotify discord --exclude nogpu --apply
 ```
 
 ### `--exclude`
@@ -78,7 +69,7 @@ Skip a match that contains a given token — useful when an app ships two
 want to wrap one of them:
 
 ```bash
-gpumask zapzap --exclude nogpu --apply
+gpumask [APPNAME] --exclude [EXCLUDE_TEXT] --apply
 ```
 
 ### Full flag reference
@@ -90,6 +81,7 @@ gpumask zapzap --exclude nogpu --apply
 | `--undo`            | Remove the wrapper, restoring default behavior         |
 | `--status`          | List every app currently wrapped                       |
 | `--doctor`          | check your system for common issues                    |
+| `--fix`             |  Checks needed requirements and program functionality    |
 | `--exclude TOKEN`   | Skip matches whose filename/name contains `TOKEN`        |
 | `-h`, `--help`        | Show usage                                             |
 | `--version`         | Show version                                           |
