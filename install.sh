@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Quick installer for gpumask (non-Arch)
+# Quick installer for gpumask.
 #
-# Installs to ~/.local/bin by default. Override with PREFIX=usr/local
-# (then run with sudo) if you want a system-wide instaed.
+#   curl -fsSL https://raw.githubusercontent.com/zeroxuf/gpumask/main/install.sh | bash
+#
+# Installs to ~/.local/bin by default. Override with PREFIX=/usr/local
+# (then run with sudo) if you want a system-wide install instead.
 set -euo pipefail
 
 REPO_RAW="https://raw.githubusercontent.com/zeroxuf/gpumask/main"
