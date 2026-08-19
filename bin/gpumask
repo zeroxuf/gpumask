@@ -1,0 +1,335 @@
+#!/usr/bin/env bash
+# gpumask: rewrite Exec= in .desktop files so specific apps launch through
+# gpumask-run (NVIDIA hidden), while everything else - including games and
+# unrelated system .desktop files - stays untouched.
+#
+# Usage:
+#   gpumask APP [APP...]                 preview matches (default, safe)
+#   gpumask APP [APP...] --apply         actually patch them
+#   gpumask APP --exclude TOKEN --apply  patch, skipping matches containing TOKEN
+#   gpumask APP [APP...] --undo          unwrap
+#   gpumask --status                     list currently-wrapped apps
+#
+# --apply, --undo and --status can go anywhere in the command - before,
+# after, or between app names:
+#   gpumask spotify discord --apply
+#   gpumask spotify --undo
+#   gpumask --undo spotify discord
+#
+# Matching is precise, not loose-substring: it only matches on the
+# filename stem (before .desktop) or the exact Name= value, both
+# case-insensitively, and only as a *whole word/token* match - so "zed"
+# will not match "kcm_breezedecoration" or similar false positives.
+set -euo pipefail
+shopt -s nullglob nocaseglob
+
+PROG="gpumask"
+VERSION="1.0.0"
+
+APPS_DIR="$HOME/.local/share/applications"
+SYSTEM_DIRS=(
+  "/usr/share/applications"
+  "/var/lib/flatpak/exports/share/applications"
+  "$HOME/.local/share/flatpak/exports/share/applications"
+)
+
+# find_igpu_bin: locate the gpumask-run helper. Checked via PATH first so
+# this works regardless of install prefix (/usr, /usr/local, ~/.local),
+# with a few common fallback locations for a not-quite-on-PATH install.
+find_igpu_bin() {
+  if command -v gpumask-run >/dev/null 2>&1; then
+    command -v gpumask-run
+    return 0
+  fi
+  local candidates=(
+    "/usr/bin/gpumask-run"
+    "/usr/local/bin/gpumask-run"
+    "$HOME/.local/bin/gpumask-run"
+  )
+  local c
+  for c in "${candidates[@]}"; do
+    [[ -x "$c" ]] && {
+      echo "$c"
+      return 0
+    }
+  done
+  return 1
+}
+IGPU_BIN="$(find_igpu_bin || true)"
+
+print_help() {
+  cat <<EOF
+$PROG $VERSION - run specific apps on the iGPU by hiding the NVIDIA dGPU
+
+Usage:
+  $PROG APP [APP...]                 preview matches (safe, default)
+  $PROG APP [APP...] --apply         actually patch them
+  $PROG APP --exclude TOKEN --apply  patch, skip matches containing TOKEN
+  $PROG APP [APP...] --undo          remove the wrapper
+  $PROG --status                     list currently-wrapped apps
+
+Flags can go anywhere in the command:
+  $PROG discord code zed spotify             # preview only, shows what would match
+  $PROG discord code zed spotify --apply     # actually applies it
+  $PROG zapzap --exclude nogpu --apply       # skip the nogpu variant
+  $PROG zed --undo
+  $PROG --undo zed
+  $PROG --status
+
+Other:
+  -h, --help     show this help
+  --version      show version
+
+gpumask needs 'bubblewrap' (bwrap) installed for --apply to work.
+EOF
+}
+
+MODE="list"
+EXCLUDES=()
+TARGET_APPS=()
+
+if [[ $# -eq 0 ]]; then
+  print_help
+  exit 1
+fi
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+  --status)
+    MODE="status"
+    shift
+    ;;
+  --undo)
+    [[ "$MODE" == "status" ]] || MODE="undo"
+    shift
+    ;;
+  --apply)
+    [[ "$MODE" == "undo" || "$MODE" == "status" ]] || MODE="apply"
+    shift
+    ;;
+  --exclude)
+    [[ $# -ge 2 ]] || {
+      echo "$PROG: --exclude needs a value" >&2
+      exit 1
+    }
+    EXCLUDES+=("${2,,}")
+    shift 2
+    ;;
+  -h | --help)
+    print_help
+    exit 0
+    ;;
+  --version)
+    echo "$PROG $VERSION"
+    exit 0
+    ;;
+  --)
+    shift
+    while [[ $# -gt 0 ]]; do
+      TARGET_APPS+=("$1")
+      shift
+    done
+    ;;
+  -*)
+    echo "$PROG: unknown option: $1" >&2
+    echo "Run '$PROG --help' for usage." >&2
+    exit 1
+    ;;
+  *)
+    TARGET_APPS+=("$1")
+    shift
+    ;;
+  esac
+done
+
+if [[ "$MODE" == "status" ]]; then
+  found=0
+  for f in "$APPS_DIR"/*.desktop; do
+    [[ -f "$f" ]] || continue
+    if [[ -n "$IGPU_BIN" ]] && grep -q "^Exec=$IGPU_BIN " "$f" 2>/dev/null; then
+      echo "$(basename "$f")"
+      ((found++)) || true
+    fi
+  done
+  echo ""
+  echo "Wrapped apps: $found"
+  exit 0
+fi
+
+if [[ ${#TARGET_APPS[@]} -eq 0 ]]; then
+  echo "$PROG: no app names given" >&2
+  echo "Run '$PROG --help' for usage." >&2
+  exit 1
+fi
+
+if [[ "$MODE" == "apply" ]]; then
+  if [[ -z "$IGPU_BIN" || ! -x "$IGPU_BIN" ]]; then
+    echo "$PROG: gpumask-run not found on PATH." >&2
+    echo "It should have been installed alongside $PROG - check your install method." >&2
+    exit 1
+  fi
+  # A single centralized check, so a broken/missing bwrap is caught once
+  # here instead of surfacing as N separately-confusing app failures.
+  if ! command -v bwrap >/dev/null 2>&1; then
+    echo "$PROG: 'bwrap' is not installed or not on PATH." >&2
+    echo "Install bubblewrap first (e.g. sudo pacman -S bubblewrap) - every" >&2
+    echo "app wrapped by gpumask-run will otherwise fail to launch." >&2
+    exit 1
+  fi
+  if ! bwrap --bind / / true 2>/dev/null; then
+    echo "$PROG: 'bwrap' is installed but a basic sandbox failed to run." >&2
+    echo "Fix bwrap before wrapping apps with it, or every wrapped app will fail." >&2
+    exit 1
+  fi
+fi
+
+mkdir -p "$APPS_DIR"
+
+# tokenize STRING -> lowercase words, splitting on anything that isn't
+# a letter or digit (so "Visual Studio Code" -> visual studio code,
+# "kcm_breezedecoration" -> kcm breezedecoration - one token, not split
+# further, which is exactly why "zed" won't match it).
+tokenize() {
+  local s="${1,,}"
+  s="${s//[^a-z0-9]/ }"
+  echo "$s"
+}
+
+# desktop_matches FILE NEEDLE
+# True if NEEDLE exactly equals the filename stem, OR exactly equals
+# one whole token of the filename stem, OR exactly equals one whole
+# token of the Name= value. No loose substring matching anywhere.
+desktop_matches() {
+  local file="$1" needle="${2,,}"
+  local base stem name_field
+
+  base="$(basename "$file")"
+  stem="${base%.desktop}"
+
+  [[ "${stem,,}" == "$needle" ]] && return 0
+
+  local tok
+  for tok in $(tokenize "$stem"); do
+    [[ "$tok" == "$needle" ]] && return 0
+  done
+
+  name_field="$(grep -m1 "^Name=" "$file" 2>/dev/null || true)"
+  name_field="${name_field#Name=}"
+  for tok in $(tokenize "$name_field"); do
+    [[ "$tok" == "$needle" ]] && return 0
+  done
+
+  return 1
+}
+
+# excluded FILE
+# True if any --exclude token whole-word-matches this file's stem or
+# Name= field - same token logic as desktop_matches, reused for
+# consistency (so --exclude nogpu behaves exactly like a match check
+# would for "nogpu").
+excluded() {
+  local file="$1" ex
+  for ex in "${EXCLUDES[@]:-}"; do
+    [[ -n "$ex" ]] || continue
+    desktop_matches "$file" "$ex" && return 0
+  done
+  return 1
+}
+
+find_desktop_files() {
+  local needle="$1"
+  local -A seen=()
+  local dir file base
+
+  for dir in "$APPS_DIR" "${SYSTEM_DIRS[@]}"; do
+    [[ -d "$dir" ]] || continue
+    for file in "$dir"/*.desktop; do
+      base="$(basename "$file")"
+      [[ -n "${seen[$base]:-}" ]] && continue
+      if desktop_matches "$file" "$needle"; then
+        seen[$base]=1
+        if excluded "$file"; then
+          echo "EXCLUDED:$file"
+        else
+          echo "$file"
+        fi
+      fi
+    done
+  done
+}
+
+patched=0
+skipped=0
+notfound=0
+undone=0
+excluded_count=0
+
+for needle in "${TARGET_APPS[@]}"; do
+  mapfile -t raw_matches < <(find_desktop_files "$needle")
+
+  if [[ ${#raw_matches[@]} -eq 0 ]]; then
+    echo "$PROG: no .desktop file matches '$needle'" >&2
+    ((notfound++)) || true
+    continue
+  fi
+
+  for entry in "${raw_matches[@]}"; do
+    if [[ "$entry" == EXCLUDED:* ]]; then
+      src="${entry#EXCLUDED:}"
+      echo "$PROG: [$needle] $(basename "$src") matched but excluded, skipping"
+      ((excluded_count++)) || true
+      continue
+    fi
+    src="$entry"
+    name="$(basename "$src")"
+    dest="$APPS_DIR/$name"
+
+    if [[ "$MODE" == "list" ]]; then
+      echo "[$needle] -> $src"
+      continue
+    fi
+
+    if [[ "$MODE" == "undo" ]]; then
+      if [[ -f "$dest" ]] && [[ -n "$IGPU_BIN" ]] && grep -q "^Exec=$IGPU_BIN " "$dest" 2>/dev/null; then
+        rm -f "$dest"
+        echo "$PROG: [$needle] unwrapped $name (removed local override)"
+        ((undone++)) || true
+      else
+        echo "$PROG: [$needle] $name not wrapped, nothing to undo"
+      fi
+      continue
+    fi
+
+    # MODE == apply
+    if [[ "$src" != "$dest" ]]; then
+      cp "$src" "$dest"
+    fi
+
+    if grep -q "^Exec=$IGPU_BIN " "$dest" 2>/dev/null; then
+      echo "$PROG: [$needle] $name already wrapped, skipping"
+      ((skipped++)) || true
+      continue
+    fi
+
+    sed -i "s|^Exec=|Exec=$IGPU_BIN |" "$dest"
+    echo "$PROG: [$needle] patched $name"
+    ((patched++)) || true
+  done
+done
+
+if [[ "$MODE" == "apply" || "$MODE" == "undo" ]] && command -v update-desktop-database >/dev/null 2>&1; then
+  update-desktop-database "$APPS_DIR" >/dev/null 2>&1 || true
+fi
+
+echo ""
+case "$MODE" in
+list)
+  echo "(preview only - nothing changed. Add --apply to actually patch these.)"
+  ;;
+apply)
+  echo "Done: $patched patched, $skipped already-wrapped, $excluded_count excluded, $notfound not found."
+  ;;
+undo)
+  echo "Done: $undone unwrapped, $notfound not found."
+  ;;
+esac

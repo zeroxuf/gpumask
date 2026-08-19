@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# gpumask-run: launch a single command with the NVIDIA dGPU hidden inside a
+# bwrap sandbox, so it can't wake it just to enumerate GPUs. Does NOT touch
+# the global session - every other app (games included) still sees NVIDIA
+# normally.
+#
+# Normally you don't run this by hand - `gpumask APP --apply` rewrites the
+# app's .desktop Exec= line to go through this wrapper automatically. But
+# it works standalone too:
+#
+#   gpumask-run firefox
+#   gpumask-run slack --startup
+#
+set -euo pipefail
+shopt -s nullglob
+
+if [[ $# -eq 0 ]]; then
+  echo "gpumask-run: usage: gpumask-run COMMAND [ARGS...]" >&2
+  exit 1
+fi
+
+# --- locate the NVIDIA dGPU dynamically (vendor id 10de) instead of a
+#     hardcoded PCI address, so this keeps working if the bus enumeration
+#     shifts after a kernel/BIOS update or you swap hardware.
+DGPU_PCI=""
+for dev in /sys/bus/pci/devices/*; do
+  if [[ -r "$dev/vendor" ]] && [[ "$(cat "$dev/vendor")" == "0x10de" ]]; then
+    DGPU_PCI="${dev##*/}"
+    break
+  fi
+done
+
+if ! command -v bwrap >/dev/null 2>&1; then
+  echo "gpumask-run: bwrap not found, running '$*' unsandboxed" >&2
+  exec "$@"
+fi
+
+BWRAP_ARGS=(
+  --bind / /
+  --dev /dev
+  --dev-bind /dev/dri /dev/dri
+  --tmpfs /dev/shm
+)
+
+if [[ -n "$DGPU_PCI" && -d "/sys/bus/pci/devices/$DGPU_PCI" ]]; then
+  BWRAP_ARGS+=(--tmpfs "/sys/bus/pci/devices/$DGPU_PCI")
+else
+  echo "gpumask-run: no NVIDIA PCI device found, nothing to mask" >&2
+fi
+
+# Mask every NVIDIA device node that actually exists. Globs are safely
+# dropped by nullglob if unmatched; nvidiactl/nvidia-modeset are literal
+# paths so they need an explicit -e check or bwrap fails on a missing
+# bind target.
+for node in /dev/nvidia* /dev/nvidiactl /dev/nvidia-modeset /dev/nvidia-uvm*; do
+  [[ -e "$node" ]] && BWRAP_ARGS+=(--bind /dev/null "$node")
+done
+
+if [[ -n "$DGPU_PCI" && -d "/sys/bus/pci/devices/$DGPU_PCI/drm" ]]; then
+  for drm_node in /sys/bus/pci/devices/"$DGPU_PCI"/drm/*; do
+    dev_name="/dev/dri/${drm_node##*/}"
+    [[ -e "$dev_name" ]] && BWRAP_ARGS+=(--bind /dev/null "$dev_name")
+  done
+fi
+
+# Warn (don't fail) if no Intel/mesa DRI node is visible after masking -
+# better to know now than have the app silently end up with zero GPUs.
+if [[ ! -e /dev/dri/renderD128 ]] && [[ -z "$(echo /dev/dri/renderD1*)" ]]; then
+  echo "gpumask-run: warning - no render node found after masking NVIDIA; iGPU may be unavailable" >&2
+fi
+
+export __NV_PRIME_RENDER_OFFLOAD=0
+export __GLX_VENDOR_LIBRARY_NAME=mesa
+export CUDA_VISIBLE_DEVICES=""
+
+if [[ -f "/usr/share/vulkan/icd.d/intel_icd.x86_64.json" ]]; then
+  export VK_DRIVER_FILES="/usr/share/vulkan/icd.d/intel_icd.x86_64.json"
+fi
+
+exec bwrap "${BWRAP_ARGS[@]}" "$@"
